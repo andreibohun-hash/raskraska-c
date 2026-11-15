@@ -207,6 +207,17 @@ const CFG = {
   floorLift: 0.07,        // насколько «пол» закрашенного светлее холста (иначе путается с пустыми сотами)
   farH: 0.55,             // незакрашенная клетка, до которой краска пока не долетает: ниже (доля высоты блока)…
   farDark: 0.4,           // …и тише: верх и бока смешаны с цветом холста (цвет виден — планирование не прятать)
+  rise: true,             // В с v0.2: закрашенное поднимается высоким ярким блоком (картинка растёт скульптурой), незакрашенное — плоские
+                          //   пастельные плитки; край пятна — плоский, но яркий, с кромкой и пульсом. URL ?v=flat — прежний вид v0.1 (для сравнения)
+  riseH: 1.0,             // высота закрашенного блока (доля высоты блока tileH)
+  flatH: 0.14,            // высота незакрашенной плитки; край пятна — чуть выше (flatReach)
+  flatReach: 0.2,
+  riseOver: 0.32,         // перелёт «подъёма»: блок вырастает с отскоком (растяжение по высоте, сжатие в ширину)
+  edgePulse: 0.16,        // пульс свечения у клеток края пятна
+  cFarTint: 0.42,         // дальние незакрашенные: пастель (сколько своего цвета поверх светлой основы)…
+  cFarDark: 0.3,          // …и тише (смесь с холстом)
+  cEdgeTint: 0.92,        // край пятна: верх почти полного цвета
+  sealFillT: 0.62,        // с: замурованная клетка затекает — краска растекается в щель медленнее, блок поднимается волной
   stoneH: 1.05,           // камень: выше блока рубежа (доля высоты блока), не красится, краска к нему липнет
   sealT: 0.32,            // с: замурованная клетка затекает — краска из тюбика, который за неё платит, летит дугой (или затекает от соседей)
   fillT: 0.16,            // с: краска разливается по клетке, клетка оседает в плоский пиксель
@@ -1286,12 +1297,14 @@ function startShot(c){
 const SPOS = [0, 0, 0];
 function shotPos(c, t){
   const T = c.t1 - c.t0, u = clamp01((t - c.t0) / T), uA = Math.min(CFG.popT, T * 0.4) / T;
-  const Dx = c.vp.x, Dz = c.vp.z, Dy = CFG.tileH * L.h, len = Math.hypot(Dx - c.bx, Dz - c.bz);
+  const Dx = c.vp.x, Dz = c.vp.z, Dy = cellTopY(), len = Math.hypot(Dx - c.bx, Dz - c.bz);
   if (u < uA){ const e = u / uA; SPOS[0] = mix(c.P0[0], c.bx, e); SPOS[2] = mix(c.P0[2], c.bz, e); }
   else { const e = (u - uA) / (1 - uA); SPOS[0] = mix(c.bx, Dx, e); SPOS[2] = mix(c.bz, Dz, e); }
   SPOS[1] = mix(c.P0[1], Dy, u * u) + Math.sin(Math.PI * u) * (CFG.shotArc + len * CFG.shotArcPer);
   return SPOS;
 }
+const cellTopY = () => CFG.tileH * L.h * (CFG.rise ? CFG.flatReach : 1);      // куда шлёпается краска: верх незакрашенной клетки
+const fillDur = (vp) => vp.sealed && CFG.rise ? CFG.sealFillT : CFG.fillT;
 function shotArrived(c, t){
   const st = G.st, vp = c.vp, W = c.W;
   if (!c.P0) startShot(c);
@@ -1302,10 +1315,10 @@ function shotArrived(c, t){
   // краска разливается по клетке; серия — пока клетки закрашиваются без пауз
   const n = W ? W.shots++ : 0, combo = (t - G.combo.at) < CFG.comboWindow ? G.combo.n + 1 : 1;
   G.combo.n = combo; G.combo.at = t;
-  vp.state = 'fill'; vp.fillAt = t; G.fills.push(vp); G.score += CFG.scoreCell;
+  vp.state = 'fill'; vp.fillAt = t; vp.sealed = !!c.seal; G.fills.push(vp); G.score += CFG.scoreCell;
   Sfx.plip(vp.kind, n % 10, 0.9); buzzDrop();
   if (CFG.logDrops) log('event', 'cell.paint', vp.k + ' paint=' + CFG.paints[vp.kind].id);
-  const col = PAL.paint[vp.kind], y = CFG.tileH * L.h;
+  const col = PAL.paint[vp.kind], y = cellTopY();
   G.splats.push({ x: vp.x, y, z: vp.z, r: Math.max(CFG.dropMin, CFG.dropR * L.h) * 1.15, kind: vp.kind, t0: t });      // «шмяк»: колбаска расплющилась о клетку
   let hx = vp.x - c.bx, hz = vp.z - c.bz; const hl = Math.hypot(hx, hz) || 1; hx /= hl; hz /= hl;
   for (let k = 0; k < CFG.splashN; k++){ const a = Math.atan2(hz, hx) + (fxRnd() - 0.5) * 2.6, sp = 35 + fxRnd() * 45; G.fx.push({ type: 'bead', x: vp.x, y, z: vp.z, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp * 0.6 - 45, t0: t, dur: 0.26 + fxRnd() * 0.1, size: (0.16 + fxRnd() * 0.1) * L.h, col }); }
@@ -1340,7 +1353,7 @@ function updateReach(t, quiet){
   for (const vp of G.vp.values()){
     if (vp.state !== 'tile'){ vp.reach = false; continue; }
     const on = vp.reachMark === mark;
-    if (on && !vp.reach){ vp.reachAt = quiet ? -9 : t; if (!quiet) G.fx.push({ type: 'glint', x: vp.x, y: CFG.tileH * L.h + 0.2, z: vp.z, t0: t, dur: 0.3, size: 0.4, col: '#ffffff' }); }
+    if (on && !vp.reach){ vp.reachAt = quiet ? -9 : t; if (!quiet) G.fx.push({ type: 'glint', x: vp.x, y: cellTopY() + 0.2, z: vp.z, t0: t, dur: 0.3, size: 0.4, col: '#ffffff' }); }
     vp.reach = on;
   }
 }
@@ -1365,7 +1378,7 @@ function addGlints(x, y, z, n, col){ const t = now(); for (let k = 0; k < n; k++
 function advance(t){
   const st = G.st; if (!st) return;
   for (let i = G.shots.length - 1; i >= 0; i--){ const c = G.shots[i]; if (t >= c.t1){ G.shots.splice(i, 1); shotArrived(c, t); } }
-  for (let i = G.fills.length - 1; i >= 0; i--){ const vp = G.fills[i]; if (t >= vp.fillAt + CFG.fillT){ G.fills.splice(i, 1); finishFill(vp, t); } }
+  for (let i = G.fills.length - 1; i >= 0; i--){ const vp = G.fills[i]; if (t >= vp.fillAt + fillDur(vp)){ G.fills.splice(i, 1); finishFill(vp, t); } }
   if (!st.ended){
     const land = landTravelers(st, t); if (land.length) onEvents(land, t);
     let guard = 0;
@@ -1500,6 +1513,7 @@ function runLose(t){
 // готовый пиксель — плоский, целиком своего цвета.
 function drawTiles(t){
   const h = L.h, H = CFG.tileH * h, PH = CFG.pixelH * h, ps = h * CFG.pixelH / CFG.tileH, intro = t - G.introAt < 3.5, E = G.end && G.end.kind === 'win' ? G.end : null, B = CFG.look !== 'A', RAW = CFG.look === 'B';   // В: закрашенное — как Б, незакрашенное — как А
+  if (CFG.rise) return drawSculpt(t, h, H, intro, E);
   for (const vp of G.vp.values()){
     let y0 = 0, pop = 1;
     if (intro){ const iu = (t - G.introAt - vp.delay) / CFG.introDropT; if (iu <= 0) continue; if (iu < 1) y0 = (1 - iu) * (1 - iu) * 5; else pop = 1 + 0.2 * spring(t - G.introAt - vp.delay - CFG.introDropT, 30, 9); }
@@ -1545,6 +1559,59 @@ function drawTiles(t){
     const sy = CFG.stoneH * (0.92 + 0.16 * S.ph) * sc, top = COL.stoneTop, side = COL.stoneSide;
     R3.tile(S.x, H / 2 * sy + y0, S.z, null, h * (0.96 + 0.06 * S.ph) * Math.max(0.3, sc), h * sy, top, 0, side, 0, COL.stoneRim, null, side, 0);
     if (y0 < 2) R3.shadow(S.x, S.z, CFG.tileR * 1.35 * h, 0.55 * sc);
+  }
+}
+
+// Вид В v0.2 «скульптура»: закрашенная клетка поднимается высоким ярким блоком (момент попадания — подъём из пола с отскоком,
+// вспышка, волна соседям), незакрашенные — плоские пастельные плитки; край пятна — плоский, но яркий: почти полный цвет, светлая кромка,
+// лёгкий пульс свечения; дальние — тихая пастель. Камни — тёмные матовые, ниже скульптуры. Затекание — медленнее, блок поднимается волной.
+function drawSculpt(t, h, H, intro, E){
+  const RH = CFG.riseH, FH = CFG.flatH, FR = CFG.flatReach;
+  for (const vp of G.vp.values()){
+    let y0 = 0, pop = 1;
+    if (intro){ const iu = (t - G.introAt - vp.delay) / CFG.introDropT; if (iu <= 0) continue; if (iu < 1) y0 = (1 - iu) * (1 - iu) * 5; else pop = 1 + 0.2 * spring(t - G.introAt - vp.delay - CFG.introDropT, 30, 9); }
+    const col = COL.paint[vp.kind];
+    if (vp.state === 'pixel'){
+      const d = t - vp.doneAt; let lift = 0, glow = Math.max(0, 1 - d / 0.3) * 0.5, hy = RH * pop, s = CFG.pixelGrow * 0.97;
+      if (d < 0.7){ const k = spring(d, 26, 7); hy *= 1 + CFG.riseOver * k; s *= 1 - 0.12 * k; }                 // отскок подъёма: растяжение вверх, сжатие в ширину
+      const fl = t - vp.flashAt; if (fl > 0 && fl < 0.3){ glow = Math.max(glow, (1 - fl / 0.3) * 0.6); lift = Math.sin(Math.PI * fl / 0.3) * 0.25 * h; }   // цвет закрашен целиком: вспышка бежит по его блокам
+      if (E){                                                  // финал: скульптура приподнята, по ней бежит волна-блик, потом вспышка и «дыхание»
+        lift = CFG.winLift * E.f; const sw = E.s - CFG.winWaveAt - vp.wr * CFG.winWavePer;
+        if (sw > 0 && sw < 0.34){ const k = Math.sin(Math.PI * sw / 0.34); lift += k * CFG.winHop * 0.45; glow = Math.max(glow, k * 0.6); hy *= 1 + 0.25 * k; }
+        if (sw > 0 && !vp.waved){ vp.waved = true; if (fxRnd() < 0.16) G.fx.push({ type: 'glint', x: vp.x, y: CFG.winLift + RH * H + 0.4, z: vp.z, t0: t, dur: 0.38, size: 0.55, col: fxRnd() < 0.5 ? '#ffffff' : PAL.paint[vp.kind] }); }
+        if (E.s > E.flashS){ glow = Math.max(glow, Math.max(0, 1 - (E.s - E.flashS) / 0.5) * 0.85); lift += 0.06 * Math.sin((E.s - E.flashS) * 2.6 - vp.wr * 0.7); }
+      } else { const sh = ((t * 0.5 + (vp.x + vp.z) * 0.045) % 3.2); if (sh < 0.16) glow = Math.max(glow, Math.sin(Math.PI * sh / 0.16) * 0.16); }   // редкий блик бежит по скульптуре
+      if (vp.lit || d < 0.4){ const e = Math.max(0, 1 - d / 0.35); R3.cellGlow(vp.i, e * 0.9); vp.lit = e > 0; }
+      R3.tile(vp.x, H * hy / 2 + y0 + lift, vp.z, null, h * s, h * hy, col, 0, null, glow, null, null, col, 2);
+      if (y0 < 2) R3.shadow(vp.x, vp.z, CFG.tileR * 1.3 * h, 0.55);
+      continue;
+    }
+    if (vp.state === 'fill'){                                  // краска растекается по плитке, блок вырастает из пола (затекание — медленнее, волной)
+      const T = fillDur(vp), u = clamp01((t - vp.fillAt) / T), e = easeOut(u), r = vp.sealed ? easeInOut(clamp01((u - 0.35) / 0.65)) : easeIn(u);
+      const hy = mix(FR, RH, r), top = vp.sealed ? COL.cFar[vp.kind] : COL.cEdge[vp.kind];
+      R3.tile(vp.x, H * hy / 2 + y0, vp.z, null, h * mix(1, CFG.pixelGrow * 0.97, e) * (1 + 0.08 * Math.sin(Math.PI * u)), h * hy, top, mix(vp.sealed ? 0.05 : CFG.fillR0, 1.5, vp.sealed ? easeInOut(Math.min(1, u * 1.6)) : e), col, 0.4 * Math.sin(Math.PI * u), null, null, col, 0);
+      if (y0 < 2) R3.shadow(vp.x, vp.z, CFG.tileR * 1.3 * h, 0.3 + 0.25 * r);
+      continue;
+    }
+    const bu = (t - vp.bumpAt) / CFG.rippleT; if (bu > 0 && bu < 1) y0 += Math.sin(Math.PI * bu) * CFG.rippleHop * h;      // волна соседям: сосед только что поднялся
+    if (vp.reach){                                             // край пятна: плоский, яркий, со светлой кромкой и пульсом; открылся — вспыхнул
+      const ra = t - vp.reachAt, open = ra < 0.5 ? Math.max(0, 1 - ra / 0.5) : 0;
+      let glow = CFG.edgePulse * (0.5 + 0.5 * Math.sin(t * 4.2 + (vp.x - vp.z) * 0.35)) + open * 0.45, rim = COL.cEdgeRim[vp.kind];
+      if (G.peek === vp.kind){ glow = 0.18 + 0.2 * (0.5 + 0.5 * Math.sin(t * 9)); rim = COL.white; }
+      const hy = FR * pop * (1 + 0.6 * open);
+      R3.tile(vp.x, H * hy / 2 + y0, vp.z, null, h * pop, h * hy, COL.cEdge[vp.kind], 0, col, glow, rim, null, col, 0);
+    } else {                                                   // дальняя: тихая пастель своего цвета, без кромки
+      const hy = FH * pop;
+      R3.tile(vp.x, H * hy / 2 + y0, vp.z, null, h * pop * 0.96, h * hy, COL.cFar[vp.kind], 0, col, 0, null, null, COL.cFarSide[vp.kind], 0);
+    }
+  }
+  for (const S of G.stones){                                   // камни: тёмный матовый валун ниже скульптуры, в финале уходят в холст
+    let y0 = 0, sc = 1;
+    if (intro){ const iu = (t - G.introAt - S.delay) / CFG.introDropT; if (iu <= 0) continue; if (iu < 1) y0 = (1 - iu) * (1 - iu) * 5; }
+    if (E){ const k = clamp01((E.s - 0.1) / 0.5); sc = 1 - easeIn(k); if (sc <= 0.02) continue; }
+    const sy = 0.62 * (0.9 + 0.2 * S.ph) * sc;
+    R3.tile(S.x, H / 2 * sy + y0, S.z, null, h * (0.82 + 0.08 * S.ph) * Math.max(0.3, sc), h * sy, COL.cStoneTop, 0, COL.cStoneSide, 0, COL.cStoneRim, null, COL.cStoneSide, 0);
+    if (y0 < 2) R3.shadow(S.x, S.z, CFG.tileR * 1.2 * h, 0.5 * sc);
   }
 }
 
@@ -1912,9 +1979,13 @@ window.RASKRASKA = {
   COL.rawTop = COL.paint.map(c => mix3(R3.rgb(css('--blank')), c, CFG.rawTint)); COL.rawSideC = COL.paint.map(c => mix3(R3.rgb(css('--blank')), c, CFG.rawSide));
   COL.rawFarTop = COL.paint.map(c => mix3(mix3(R3.rgb(css('--blank')), c, CFG.rawFarTint), board, CFG.rawFar)); COL.rawFarSide = COL.rawSideC.map(c => mix3(c, board, CFG.rawFar + 0.15));
   COL.floorSeam = mix3(floor, [1, 1, 1], 0.16);   // светлый шов «плитки пола» по кромке закрашенной клетки (вид А)
+  if (/[?&]v=flat(&|$)/i.test(location.search)) CFG.rise = false;
   COL.stoneTop = R3.rgb('#9a9cb0'); COL.stoneSide = R3.rgb('#5d6078'); COL.stoneRim = R3.rgb('#c4c6d6');   // камень: холодный серый, светлая кромка
   COL.blankBase = R3.rgb(css('--blank')); COL.blank = COL.paint.map(c => mix3(COL.blankBase, c, CFG.blankTint)); COL.blankFar = COL.blank.map(c => mix3(c, board, CFG.farDark)); COL.farSide = COL.paint.map(c => mix3(c, board, CFG.farDark * 0.85));   // недостижимые пока клетки — чуть темнее (сильнее — путаются с приглушённым закрашенным)
   COL.blankRim = COL.blank.map(c => mix3(c, COL.white, CFG.reachRim)); COL.rawRim = COL.rawTop.map(c => mix3(c, COL.white, CFG.reachRim));   // постоянная кромка доступной клетки
+  COL.cFar = COL.paint.map(c => mix3(mix3(COL.blankBase, c, CFG.cFarTint), board, CFG.cFarDark)); COL.cFarSide = COL.cFar.map(c => mix3(c, ink, 0.25));   // В: дальние — тихая пастель
+  COL.cEdge = COL.paint.map(c => mix3(COL.blankBase, c, CFG.cEdgeTint)); COL.cEdgeRim = COL.cEdge.map(c => mix3(c, COL.white, 0.85));             // край пятна — яркий, светлая кромка
+  COL.cStoneTop = R3.rgb('#6e7186'); COL.cStoneSide = R3.rgb('#41435a'); COL.cStoneRim = R3.rgb('#8d90a6');                                      // камень в «скульптуре» — тёмный матовый
   COL.paper = R3.rgb(css('--paper')); COL.secret = R3.rgb(css('--secret')); COL.secretDark = mix3(COL.secret, ink, 0.68);
   // тюбики: у тёмных красок контур светлый (иначе чёрный тюбик — дырка в тёмном фоне), крышка контрастная корпусу
   const lum = (c) => c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11, edgeLight = R3.rgb('#c9cdf0');
