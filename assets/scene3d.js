@@ -94,9 +94,21 @@ varying vec3 vN; varying vec3 vLP; varying vec3 vLN; varying vec4 vFace; varying
 void main(){
   vec3 N = normalize(vN);
   vec2 p = vLP.xz / uR;
-  float mode = min(vBack.a, 1.0), wet = max(vBack.a - 1.0, 0.0);   // 0 — незакрашенная, 1 — готовый пиксель, 2 — «мокрая» краска (вид Б)
+  float mode = clamp(vBack.a, 0.0, 1.0), wet = max(vBack.a - 1.0, 0.0);   // 0 — незакрашенная, 1 — готовый пиксель, 2 — «мокрая» краска (вид Б)
   vec3 col;
-  if (vLN.y > 0.9){                                            // лицо
+  if (vBack.a < -0.5 && vLN.y > 0.9){                          // вид В v0.3: лунка в полу — ободок своего цвета, внутри тёмная чаша (свет сверху слева:
+    float d = hexd(p), r = length(p);                          //   у вогнутой чаши освещена дальняя, правая нижняя стенка), налив — клякса краски по дну
+    vec3 lip = vFace.rgb, inner = vBack.rgb;
+    float lit = clamp(dot(p / max(r, 0.001), vec2(0.62, 0.78)), -1.0, 1.0);
+    vec3 bowl = inner * (0.78 + 0.32 * lit * smoothstep(0.12, 0.52, r)) * (1.0 - 0.18 * smoothstep(0.35, 0.0, r));
+    float onLip = smoothstep(0.5, 0.56, d);
+    col = mix(bowl, lip, onLip);
+    col = mix(col, vec3(1.0), 0.24 * smoothstep(0.58, 0.64, d) * (1.0 - smoothstep(0.72, 0.82, d)) * clamp(-dot(normalize(p + 1e-4), vec2(0.62, 0.78)), 0.0, 1.0));   // блик на ободке к свету
+    col = mix(col, lip * 0.6, smoothstep(0.5, 0.54, d) * (1.0 - smoothstep(0.54, 0.58, d)) * 0.8);   // внутренняя кромка ободка
+    float bR = vFace.a;
+    if (bR > 0.001){ float rr = r * (1.0 + 0.06 * sin(atan(p.y, p.x) * 3.0 + vSeed * 6.2832)); col = mix(col, mix(vBlob.rgb, vBlob.rgb * 0.8, smoothstep(bR - 0.18, bR, rr)), smoothstep(bR, bR - 0.05, rr)); }
+    if (vRim1.a > 0.0) col = mix(col, vRim1.rgb, smoothstep(0.7, 0.8, d) * vRim1.a);   // зажат тюбик / тёмная краска: ободок светлеет
+  } else if (vLN.y > 0.9){                                     // лицо
     col = vFace.rgb;
     float bR = vFace.a;
     if (bR > 0.001){                                           // метка цвета (или разливающаяся краска): круг с тёмной кромкой — видно и белую на светлом

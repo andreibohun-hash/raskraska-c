@@ -153,6 +153,9 @@ S.carrierGone = function(){
 S.reject = function(){ if (!on()) return; const t = S.ac.currentTime; osc(170, 'triangle', t, 0.28, 0.035, bus, 0.002, 120); osc(140, 'triangle', t + 0.09, 0.26, 0.04, bus, 0.002, 100); note('reject'); };
 // Пломба «?» отщёлкнулась: сухой «щёлк», шорох и два буля краски.
 S.reveal = function(kind){ if (!on()) return; const t = S.ac.currentTime; noise(t, 0.012, 0.3, 'bandpass', 3800, 2, bus); noise(t + 0.03, 0.1, 0.1, 'bandpass', 1800, 1, bus, 5000); S.plip(kind, 5, 0.5, 0.05); S.plip(kind, 7, 0.4, 0.12); note('secret.reveal'); };
+// Клетка стала краем пятна — плитка проседает в лунку: тихий сухой «тк» (не чаще раза в 90 мс: клетки открываются пачками).
+let sinkAt = 0;
+S.sink = function(){ if (!on()) return; const t = S.ac.currentTime; if (t - sinkAt < 0.09) return; sinkAt = t; noise(t, 0.012, 0.07, 'bandpass', 2600 * jit(0.15), 2.2, bus); plop(190 * jit(0.1), t + 0.004, 0.18, bus, 0.035); note('cell.sink'); };
 S.tick = function(){ if (!on()) return; const t = S.ac.currentTime; if (t - tickAt < 0.2) return; tickAt = t; osc(1900, 'square', t, 0.035, 0.008, bus, 0.001); osc(1200, 'sine', t, 0.03, 0.012, bus, 0.001); };
 let uiN = 0;
 S.ui = function(){ if (!on()) return; S.plip(0, 3 + (uiN++ % 3), 0.5); };                 // кнопки булькают

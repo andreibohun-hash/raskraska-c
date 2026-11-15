@@ -217,6 +217,12 @@ const CFG = {
   cFarTint: 0.42,         // дальние незакрашенные: пастель (сколько своего цвета поверх светлой основы)…
   cFarDark: 0.3,          // …и тише (смесь с холстом)
   cEdgeTint: 0.92,        // край пятна: верх почти полного цвета
+  well: true,             // В с v0.3: край пятна — лунка в полу (ободок своего цвета, тёмная чаша), дальние — бледные; ?v=v02 — край v0.2
+  wellH: 0.05,            // толщина лунки (доля tileH): почти вровень с полом
+  pourT: 0.13,            // с: краска заливает лунку, потом блок вырастает из неё (fillT — весь налив с подъёмом)
+  sinkT: 0.14,            // с: клетка стала краем — плитка проседает в лунку
+  paleTint: 0.2,          // дальние: почти серая пастель, своего цвета чуть-чуть…
+  paleDark: 0.22,         // …и смесь с холстом
   sealFillT: 0.62,        // с: замурованная клетка затекает — краска растекается в щель медленнее, блок поднимается волной
   stoneH: 1.05,           // камень: выше блока рубежа (доля высоты блока), не красится, краска к нему липнет
   sealT: 0.32,            // с: замурованная клетка затекает — краска из тюбика, который за неё платит, летит дугой (или затекает от соседей)
@@ -1303,8 +1309,8 @@ function shotPos(c, t){
   SPOS[1] = mix(c.P0[1], Dy, u * u) + Math.sin(Math.PI * u) * (CFG.shotArc + len * CFG.shotArcPer);
   return SPOS;
 }
-const cellTopY = () => CFG.tileH * L.h * (CFG.rise ? CFG.flatReach : 1);      // куда шлёпается краска: верх незакрашенной клетки
-const fillDur = (vp) => vp.sealed && CFG.rise ? CFG.sealFillT : CFG.fillT;
+const cellTopY = () => CFG.tileH * L.h * (!CFG.rise ? 1 : CFG.well ? CFG.wellH : CFG.flatReach);      // куда шлёпается краска: верх незакрашенной клетки
+const fillDur = (vp) => vp.sealed && CFG.rise ? CFG.sealFillT : CFG.rise && CFG.well ? CFG.pourT + CFG.fillT : CFG.fillT;
 function shotArrived(c, t){
   const st = G.st, vp = c.vp, W = c.W;
   if (!c.P0) startShot(c);
@@ -1353,7 +1359,7 @@ function updateReach(t, quiet){
   for (const vp of G.vp.values()){
     if (vp.state !== 'tile'){ vp.reach = false; continue; }
     const on = vp.reachMark === mark;
-    if (on && !vp.reach){ vp.reachAt = quiet ? -9 : t; if (!quiet) G.fx.push({ type: 'glint', x: vp.x, y: cellTopY() + 0.2, z: vp.z, t0: t, dur: 0.3, size: 0.4, col: '#ffffff' }); }
+    if (on && !vp.reach){ vp.reachAt = quiet ? -9 : t; if (!quiet && CFG.rise && CFG.well) Sfx.sink(); if (!quiet) G.fx.push({ type: 'glint', x: vp.x, y: cellTopY() + 0.2, z: vp.z, t0: t, dur: 0.3, size: 0.4, col: '#ffffff' }); }
     vp.reach = on;
   }
 }
@@ -1586,6 +1592,16 @@ function drawSculpt(t, h, H, intro, E){
       if (y0 < 2) R3.shadow(vp.x, vp.z, CFG.tileR * 1.3 * h, 0.55);
       continue;
     }
+    if (vp.state === 'fill' && CFG.well){                      // v0.3: краска заливает лунку, из неё вырастает блок (затекание — лунка наливается сама, медленно)
+      const T = fillDur(vp), tp = vp.sealed ? T * 0.55 : CFG.pourT, f = t - vp.fillAt;
+      if (f < tp){ const u = clamp01(f / tp);
+        R3.tile(vp.x, H * CFG.wellH / 2 + y0, vp.z, null, h * (1 + 0.06 * Math.sin(Math.PI * u)), h * CFG.wellH, COL.wellLip[vp.kind], 0.04 + 0.52 * (vp.sealed ? easeInOut(u) : easeOut(u)), col, 0.25 * u, COL.wellRim[vp.kind], null, COL.wellIn[vp.kind], -1);
+        continue; }
+      const u = clamp01((f - tp) / (T - tp)), r = vp.sealed ? easeInOut(u) : easeOut(u), hy = mix(CFG.wellH, RH, r);
+      R3.tile(vp.x, H * hy / 2 + y0, vp.z, null, h * mix(1, CFG.pixelGrow * 0.97, r) * (1 + 0.08 * Math.sin(Math.PI * u)), h * hy, col, 0, null, 0.4 * (1 - u), null, null, col, 2);
+      if (y0 < 2) R3.shadow(vp.x, vp.z, CFG.tileR * 1.3 * h, 0.3 + 0.25 * r);
+      continue;
+    }
     if (vp.state === 'fill'){                                  // краска растекается по плитке, блок вырастает из пола (затекание — медленнее, волной)
       const T = fillDur(vp), u = clamp01((t - vp.fillAt) / T), e = easeOut(u), r = vp.sealed ? easeInOut(clamp01((u - 0.35) / 0.65)) : easeIn(u);
       const hy = mix(FR, RH, r), top = vp.sealed ? COL.cFar[vp.kind] : COL.cEdge[vp.kind];
@@ -1594,7 +1610,17 @@ function drawSculpt(t, h, H, intro, E){
       continue;
     }
     const bu = (t - vp.bumpAt) / CFG.rippleT; if (bu > 0 && bu < 1) y0 += Math.sin(Math.PI * bu) * CFG.rippleHop * h;      // волна соседям: сосед только что поднялся
-    if (vp.reach){                                             // край пятна: плоский, яркий, со светлой кромкой и пульсом; открылся — вспыхнул
+    if (vp.reach && CFG.well){                                 // край пятна v0.3: лунка в полу; стала краем — плитка проседает в неё с бликом
+      const ra = t - vp.reachAt;
+      if (ra >= 0 && ra < CFG.sinkT){ const k = easeIn(ra / CFG.sinkT), hy = mix(FH, CFG.wellH, k) * pop;
+        R3.tile(vp.x, H * hy / 2 + y0, vp.z, null, h * pop * 0.96, h * hy, COL.pale[vp.kind], 0, col, 0.25 * k, null, null, COL.paleSide[vp.kind], 0); continue; }
+      const open = ra >= 0 && ra < 0.45 ? 1 - (ra - CFG.sinkT) / (0.45 - CFG.sinkT) : 0, bump = open > 0 ? 1 + 0.1 * spring(ra - CFG.sinkT, 30, 9) : 1;
+      let rim = COL.wellRim[vp.kind], ra1 = rim ? 0.55 : 0;
+      if (G.peek === vp.kind){ rim = COL.white; ra1 = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(t * 9)); }
+      R3.tile(vp.x, H * CFG.wellH / 2 + y0, vp.z, null, h * pop * bump, h * CFG.wellH, COL.wellLip[vp.kind], 0, col, 0.3 * Math.max(0, open), rim ? (ra1 === 0.55 ? rim : mix3(COL.wellLip[vp.kind], rim, ra1)) : null, null, COL.wellIn[vp.kind], -1);
+      continue;
+    }
+    if (vp.reach){                                             // край пятна (v0.2): плоский, яркий, со светлой кромкой и пульсом; открылся — вспыхнул
       const ra = t - vp.reachAt, open = ra < 0.5 ? Math.max(0, 1 - ra / 0.5) : 0;
       let glow = CFG.edgePulse * (0.5 + 0.5 * Math.sin(t * 4.2 + (vp.x - vp.z) * 0.35)) + open * 0.45, rim = COL.cEdgeRim[vp.kind];
       if (G.peek === vp.kind){ glow = 0.18 + 0.2 * (0.5 + 0.5 * Math.sin(t * 9)); rim = COL.white; }
@@ -1602,7 +1628,7 @@ function drawSculpt(t, h, H, intro, E){
       R3.tile(vp.x, H * hy / 2 + y0, vp.z, null, h * pop, h * hy, COL.cEdge[vp.kind], 0, col, glow, rim, null, col, 0);
     } else {                                                   // дальняя: тихая пастель своего цвета, без кромки
       const hy = FH * pop;
-      R3.tile(vp.x, H * hy / 2 + y0, vp.z, null, h * pop * 0.96, h * hy, COL.cFar[vp.kind], 0, col, 0, null, null, COL.cFarSide[vp.kind], 0);
+      R3.tile(vp.x, H * hy / 2 + y0, vp.z, null, h * pop * 0.96, h * hy, (CFG.well ? COL.pale : COL.cFar)[vp.kind], 0, col, 0, null, null, (CFG.well ? COL.paleSide : COL.cFarSide)[vp.kind], 0);
     }
   }
   for (const S of G.stones){                                   // камни: тёмный матовый валун ниже скульптуры, в финале уходят в холст
@@ -1980,6 +2006,12 @@ window.RASKRASKA = {
   COL.rawFarTop = COL.paint.map(c => mix3(mix3(R3.rgb(css('--blank')), c, CFG.rawFarTint), board, CFG.rawFar)); COL.rawFarSide = COL.rawSideC.map(c => mix3(c, board, CFG.rawFar + 0.15));
   COL.floorSeam = mix3(floor, [1, 1, 1], 0.16);   // светлый шов «плитки пола» по кромке закрашенной клетки (вид А)
   if (/[?&]v=flat(&|$)/i.test(location.search)) CFG.rise = false;
+  if (/[?&]v=v02(&|$)/i.test(location.search)) CFG.well = false;
+  { const gray = R3.rgb('#a3a8c4'), lumP = (c) => c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11, light = R3.rgb('#c9cdf0');
+    COL.pale = COL.paint.map(c => mix3(mix3(gray, c, CFG.paleTint), board, CFG.paleDark)); COL.paleSide = COL.pale.map(c => mix3(c, ink, 0.3));   // дальние — бледные
+    COL.wellLip = COL.paint.map(c => lumP(c) < 0.3 ? mix3(c, light, 0.28) : c);                                                             // ободок: полный цвет (тёмный — чуть светлее)
+    COL.wellIn = COL.paint.map(c => lumP(c) < 0.3 ? mix3(c, [0, 0, 0], 0.45) : mix3(c, ink, 0.6));                                             // чаша внутри — темнее
+    COL.wellRim = COL.paint.map(c => lumP(c) < 0.3 ? light : null); }                                                                     // тёмной краске — светлая обводка ободка
   COL.stoneTop = R3.rgb('#9a9cb0'); COL.stoneSide = R3.rgb('#5d6078'); COL.stoneRim = R3.rgb('#c4c6d6');   // камень: холодный серый, светлая кромка
   COL.blankBase = R3.rgb(css('--blank')); COL.blank = COL.paint.map(c => mix3(COL.blankBase, c, CFG.blankTint)); COL.blankFar = COL.blank.map(c => mix3(c, board, CFG.farDark)); COL.farSide = COL.paint.map(c => mix3(c, board, CFG.farDark * 0.85));   // недостижимые пока клетки — чуть темнее (сильнее — путаются с приглушённым закрашенным)
   COL.blankRim = COL.blank.map(c => mix3(c, COL.white, CFG.reachRim)); COL.rawRim = COL.rawTop.map(c => mix3(c, COL.white, CFG.reachRim));   // постоянная кромка доступной клетки
